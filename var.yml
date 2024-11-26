@@ -1,0 +1,96 @@
+---
+- name: Install and configure Apache Tomcat
+  hosts: localhost
+  become: yes
+
+  vars:
+    tomcat_version: "10.1.9"
+    tomcat_install_dir: "/opt/tomcat"
+    tomcat_user: "tomcat"
+    tomcat_group: "tomcat"
+
+  tasks:
+    - name: Install required dependencies
+      apt:
+        name:
+          - default-jdk
+          - wget
+          - tar
+        state: present
+        update_cache: yes
+
+    - name: Create a group for Tomcat
+      group:
+        name: "{{ tomcat_group }}"
+
+    - name: Create a Tomcat user
+      user:
+        name: "{{ tomcat_user }}"
+        group: "{{ tomcat_group }}"
+        shell: /bin/false
+
+    - name: Download Apache Tomcat tarball
+      get_url:
+        url: "https://downloads.apache.org/tomcat/tomcat-{{ tomcat_version.split('.')[0] }}/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
+        dest: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
+
+    - name: Create Tomcat installation directory
+      file:
+        path: "{{ tomcat_install_dir }}"
+        state: directory
+        owner: "{{ tomcat_user }}"
+        group: "{{ tomcat_group }}"
+
+    - name: Extract Tomcat archive
+      unarchive:
+        src: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
+        dest: "{{ tomcat_install_dir }}"
+        remote_src: yes
+      register: tomcat_unarchived
+
+    - name: Set ownership of Tomcat files
+      file:
+        path: "{{ tomcat_install_dir }}/apache-tomcat-{{ tomcat_version }}"
+        state: directory
+        owner: "{{ tomcat_user }}"
+        group: "{{ tomcat_group }}"
+        recurse: yes
+      when: tomcat_unarchived.changed
+
+    - name: Create a symbolic link for Tomcat
+      file:
+        src: "{{ tomcat_install_dir }}/apache-tomcat-{{ tomcat_version }}"
+        dest: "{{ tomcat_install_dir }}/tomcat"
+        state: link
+
+    - name: Create Tomcat systemd service file
+      copy:
+        dest: /etc/systemd/system/tomcat.service
+        content: |
+          [Unit]
+          Description=Apache Tomcat Web Application Container
+          After=network.target
+
+          [Service]
+          Type=forking
+          User={{ tomcat_user }}
+          Group={{ tomcat_group }}
+          Environment="JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64"
+          Environment="CATALINA_PID={{ tomcat_install_dir }}/tomcat/temp/tomcat.pid"
+          Environment="CATALINA_HOME={{ tomcat_install_dir }}/tomcat"
+          Environment="CATALINA_BASE={{ tomcat_install_dir }}/tomcat"
+          ExecStart={{ tomcat_install_dir }}/tomcat/bin/startup.sh
+          ExecStop={{ tomcat_install_dir }}/tomcat/bin/shutdown.sh
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd daemon
+      command: systemctl daemon-reload
+
+    - name: Enable and start Tomcat service
+      service:
+        name: tomcat
+        state: started
+        enabled: yes
